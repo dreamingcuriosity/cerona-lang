@@ -164,6 +164,57 @@ def ifs(lines, filename="<input>"):
 
         return False
 
+    def find_matching_end(commands, start_index, start_keyword, end_keyword):
+        depth = 1
+        current_index = start_index + 1
+        while current_index < len(commands) and depth > 0:
+            line_num, cmd = commands[current_index]
+            if cmd and len(cmd) > 0:
+                if cmd[0] == start_keyword:
+                    depth += 1
+                elif cmd[0] == end_keyword:
+                    depth -= 1
+            current_index += 1
+        return current_index - 1 if depth == 0 else -1
+
+    def call_function(func_name, args, current_variables, all_commands, return_var=None):
+        if func_name not in functions:
+            # Find line number where function is called
+            for line_num, cmd in all_commands:
+                if cmd and cmd[0] == "call" and len(cmd) > 1 and cmd[1] == func_name:
+                    raise CeronaError(
+                        f"undefined function '{func_name}'",
+                        line_num,
+                        original_lines[line_num - 1] if line_num <= len(original_lines) else None
+                    )
+            raise CeronaError(f"undefined function '{func_name}'")
+        
+        params, body_commands, func_start_index = functions[func_name]
+        
+        if len(args) != len(params):
+            raise CeronaError(
+                f"function '{func_name}' expects {len(params)} arguments, got {len(args)}",
+                func_start_index,
+                original_lines[func_start_index - 1] if func_start_index <= len(original_lines) else None
+            )
+        
+        local_vars = current_variables.copy()
+        for param_name, arg_value in zip(params, args):
+            local_vars[param_name] = arg_value
+        
+        index = 0
+        while index < len(all_commands):
+            line_num, cmd = all_commands[index]
+            if line_num > func_start_index and cmd and cmd[0] == "endfunc":
+                break
+            if line_num > func_start_index:
+                if cmd and cmd[0] == "return":
+                    return resolve_value(cmd[1], local_vars, line_num) if len(cmd) > 1 else None
+                skip_ahead = execute_single_command(line_num, cmd, local_vars, all_commands)
+                if skip_ahead is not None:
+                    index += skip_ahead
+            index += 1
+
     def execute_single_command(line_num, i, variables, all_commands):
         """Execute a single command - core interpreter logic"""
         if not i:

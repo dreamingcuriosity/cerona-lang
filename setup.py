@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="cerona",
-    version="0.2.5.1",
+    version="0.3.0",
     author="ZaiperUnbound",
     author_email="altheahueteah@gmal.com",
     license="MIT",
