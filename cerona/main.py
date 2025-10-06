@@ -342,7 +342,9 @@ def ifs(lines):
         if skip_ahead is not None:
             index += skip_ahead
         index += 1
-
+def execute(code: str):
+    """Execute Cerona source code directly from a string."""
+    return ifs(code)
 
 def main():
     """CLI entry point"""
