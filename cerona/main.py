@@ -168,10 +168,12 @@ def ifs(lines, filename="<input>"):
         depth = 1
         current_index = start_index + 1
         while current_index < len(commands) and depth > 0:
-            if commands[current_index] and commands[current_index][1] and commands[current_index][1][0] == start_keyword:
-                depth += 1
-            elif commands[current_index] and commands[current_index][1] and commands[current_index][1][0] == end_keyword:
-                depth -= 1
+            line_num, cmd = commands[current_index]
+            if cmd and len(cmd) > 0:
+                if cmd[0] == start_keyword:
+                    depth += 1
+                elif cmd[0] == end_keyword:
+                    depth -= 1
             current_index += 1
         return current_index - 1 if depth == 0 else -1
 
