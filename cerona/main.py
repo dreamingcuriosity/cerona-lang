@@ -8,12 +8,12 @@ class CeronaError(Exception):
         self.line_content = line_content
         self.col = col
         super().__init__(self.format_error())
-    
+
     def format_error(self):
         """Format error in GCC-style"""
         if self.line_num is None:
             return f"error: {self.message}"
-        
+
         error_msg = f"error at line {self.line_num}: {self.message}\n"
         if self.line_content:
             error_msg += f"  {self.line_num} | {self.line_content}\n"
@@ -21,20 +21,63 @@ class CeronaError(Exception):
                 error_msg += f"     | {' ' * self.col}^\n"
         return error_msg
 
+
+class CeronaClass:
+    """Represents a class definition in Cerona"""
+    def __init__(self, name, attributes, methods, line_num):
+        self.name = name
+        self.attributes = attributes
+        self.methods = methods
+        self.line_num = line_num
+
+
+class CeronaObject:
+    """Represents an instance of a Cerona class"""
+    def __init__(self, class_def, instance_vars):
+        self.class_def = class_def
+        self.instance_vars = instance_vars.copy()
+
+    def get_attr(self, attr_name):
+        return self.instance_vars.get(attr_name)
+
+    def set_attr(self, attr_name, value):
+        self.instance_vars[attr_name] = value
+
+
+def find_matching_end(commands, start_index, start_keyword, end_keyword):
+    """Find the matching end keyword for a block structure"""
+    depth = 1
+    search_index = start_index + 1
+
+    while search_index < len(commands) and depth > 0:
+        ln, cmd = commands[search_index]
+        if cmd and cmd[0] == start_keyword:
+            depth += 1
+        elif cmd and cmd[0] == end_keyword:
+            depth -= 1
+            if depth == 0:
+                return search_index
+        search_index += 1
+
+    return -1
+
+
 def ifs(lines, filename="<input>"):
     variables = {}
     functions = {}
-    
+    classes = {}
+    objects = {}
+
     # Store original lines for error reporting
     original_lines = lines.split("\n")
-    
+
     def parse_line(line, line_num):
-        """Parse a line, handling quotes properly"""
+        """Parse a line, handling quotes properly and stripping parentheses"""
         try:
             comment_index = -1
             in_quotes = False
             quote_char = None
-            
+
             for idx, char in enumerate(line):
                 if char in ['"', "'"]:
                     if not in_quotes:
@@ -53,6 +96,10 @@ def ifs(lines, filename="<input>"):
             line = line.strip()
             if not line:
                 return []
+
+            # Strip leading/trailing parentheses before tokenizing
+            while line.startswith('(') and line.endswith(')'):
+                line = line[1:-1].strip()
 
             tokens = []
             current_token = ""
@@ -80,6 +127,11 @@ def ifs(lines, filename="<input>"):
                         current_token = ""
                     else:
                         current_token += char
+                elif char in ['(', ')'] and not in_quotes:
+                    # Skip parentheses when not in quotes
+                    if current_token:
+                        tokens.append(current_token)
+                        current_token = ""
                 elif char in [' ', '\t'] and not in_quotes:
                     if current_token:
                         tokens.append(current_token)
@@ -89,7 +141,7 @@ def ifs(lines, filename="<input>"):
 
             if current_token:
                 tokens.append(current_token)
-            
+
             if in_quotes:
                 raise CeronaError(
                     f"unterminated string literal",
@@ -134,10 +186,10 @@ def ifs(lines, filename="<input>"):
         except:
             left_num, right_num = left, right
 
-        valid_operators = ["equals", "==", "notequals", "!=", "greater", ">", 
-                          "greaterequals", ">=", "less", "<", "lessequals", "<=", 
+        valid_operators = ["equals", "==", "notequals", "!=", "greater", ">",
+                          "greaterequals", ">=", "less", "<", "lessequals", "<=",
                           "contains", "in"]
-        
+
         if operator not in valid_operators:
             raise CeronaError(
                 f"unknown operator '{operator}' (valid: {', '.join(valid_operators)})",
@@ -164,44 +216,238 @@ def ifs(lines, filename="<input>"):
 
         return False
 
+    def call_function(func_name, args, scope, all_commands):
+        """Call a user-defined function"""
+        if func_name not in functions:
+            raise CeronaError(f"undefined function '{func_name}'")
+
+        params, commands, func_line_num = functions[func_name]
+
+        if len(args) != len(params):
+            raise CeronaError(
+                f"function '{func_name}' expects {len(params)} arguments, got {len(args)}"
+            )
+
+        # Create function scope
+        func_scope = scope.copy()
+        for param, arg in zip(params, args):
+            func_scope[param] = arg
+
+        # Execute function body
+        current_index = next((idx for idx, (ln, cmd) in enumerate(commands) if ln == func_line_num), -1)
+        endfunc_index = find_matching_end(commands, current_index, "func", "endfunc")
+
+        if endfunc_index != -1:
+            body_index = current_index + 1
+            while body_index < endfunc_index:
+                ln, cmd = commands[body_index]
+                skip = execute_single_command(ln, cmd, func_scope, commands)
+                if skip is not None:
+                    body_index += skip
+                body_index += 1
+
+    def call_method(obj, method_name, args, all_commands):
+        """Call a method on an object"""
+        if method_name not in obj.class_def.methods:
+            raise CeronaError(
+                f"method '{method_name}' not found in class '{obj.class_def.name}'"
+            )
+
+        params, commands, func_line_num = obj.class_def.methods[method_name]
+
+        if len(args) != len(params):
+            raise CeronaError(
+                f"method '{method_name}' expects {len(args)} arguments, got {len(args)}"
+            )
+
+        # Create method scope with instance variables
+        method_scope = obj.instance_vars.copy()
+        method_scope.update(variables)
+
+        for param, arg in zip(params, args):
+            method_scope[param] = arg
+
+        # Execute method body
+        current_index = next((idx for idx, (ln, cmd) in enumerate(commands) if ln == func_line_num), -1)
+        endfunc_index = find_matching_end(commands, current_index, "func", "endfunc")
+
+        if endfunc_index != -1:
+            body_index = current_index + 1
+            while body_index < endfunc_index:
+                ln, cmd = commands[body_index]
+                skip = execute_single_command(ln, cmd, method_scope, commands)
+                if skip is not None:
+                    body_index += skip
+                body_index += 1
+
+        # Update instance variables from method scope
+        for key in obj.instance_vars.keys():
+            if key in method_scope:
+                obj.instance_vars[key] = method_scope[key]
+
     def execute_single_command(line_num, i, variables, all_commands):
         """Execute a single command - core interpreter logic"""
         if not i:
             return
 
         try:
-            # --- PRINT ---
-            if i[0] == "print":
-                if len(i) < 2:
-                    raise CeronaError(
-                        "print requires at least one argument",
-                        line_num,
-                        original_lines[line_num - 1] if line_num <= len(original_lines) else None
-                    )
-                expr = " ".join(i[1:])
-                try:
-                    result = eval(expr, {"__builtins__": None}, variables)
-                    print(result)
-                except:
-                    output_parts = []
-                    for word in i[1:]:
-                        output_parts.append(str(variables.get(word, word)))
-                    print(" ".join(output_parts))
-
             # --- SET VARIABLE ---
-            elif i[0] == "set":
+            if i[0] == "set":
                 if len(i) < 3:
                     raise CeronaError(
                         "set requires variable name and value",
                         line_num,
                         original_lines[line_num - 1] if line_num <= len(original_lines) else None
                     )
+
                 var_name = i[1]
-                value_str = " ".join(i[2:])
+                expr = " ".join(i[2:])
+
+                # Try to evaluate as expression
                 try:
-                    variables[var_name] = eval(value_str, {"__builtins__": None}, variables)
+                    variables[var_name] = eval(expr, {"__builtins__": None}, variables)
                 except:
-                    variables[var_name] = value_str
+                    # If eval fails, try to resolve and then store
+                    resolved = resolve_value(expr, variables, line_num)
+                    # Check if resolved value is a string that looks like an expression
+                    if isinstance(resolved, str) and any(op in resolved for op in ['+', '-', '*', '/', '%']):
+                        try:
+                            variables[var_name] = eval(resolved, {"__builtins__": None}, variables)
+                        except:
+                            variables[var_name] = resolved
+                    else:
+                        variables[var_name] = resolved
+
+            # Replace the print section in execute_single_command (around line 281)
+
+            # --- PRINT ---
+            elif i[0] == "print":
+                if len(i) < 2:
+                    raise CeronaError("print requires at least one argument", line_num)
+
+                # Join all tokens after "print"
+                expr = " ".join(i[1:])
+    
+                # First, try to evaluate as expression with current scope
+                try:
+                    result = eval(expr,  variables)
+                    print(result)
+                    return
+                except:
+                    pass
+    
+                # If that fails, try direct variable lookup
+                if expr in variables:
+                    print(variables[expr])
+                    return
+    
+                # Check object attributes
+                for obj in objects.values():
+                    if expr in obj.instance_vars:
+                        print(obj.instance_vars[expr])
+                        return
+    
+                # If all else fails, print as literal
+                print(expr)
+            # --- CLASS DEFINITION ---
+            elif i[0] == "class":
+                if len(i) < 2:
+                    raise CeronaError(
+                        "class requires class name",
+                        line_num,
+                        original_lines[line_num - 1] if line_num <= len(original_lines) else None
+                    )
+
+                class_name = i[1]
+                current_index = next((idx for idx, (ln, cmd) in enumerate(all_commands) if ln == line_num), -1)
+                endclass_index = find_matching_end(all_commands, current_index, "class", "endclass")
+
+                if endclass_index == -1:
+                    raise CeronaError(
+                        f"missing 'endclass' for class '{class_name}'",
+                        line_num,
+                        original_lines[line_num - 1] if line_num <= len(original_lines) else None
+                    )
+
+                # Parse class body
+                attributes = {}
+                methods = {}
+                class_index = current_index + 1
+
+                while class_index < endclass_index:
+                    ln, cmd = all_commands[class_index]
+
+                    if cmd[0] == "set":
+                        # Class attribute
+                        if len(cmd) >= 3:
+                            attr_name = cmd[1]
+                            attr_value = " ".join(cmd[2:])
+                            try:
+                                attributes[attr_name] = eval(attr_value, {"__builtins__": None}, {})
+                            except:
+                                attributes[attr_name] = attr_value
+
+                    elif cmd[0] == "func":
+                        # Class method
+                        if len(cmd) < 2:
+                            raise CeronaError(
+                                "func requires function name",
+                                ln,
+                                original_lines[ln - 1] if ln <= len(original_lines) else None
+                            )
+
+                        method_name = cmd[1]
+                        params = cmd[2:]
+
+                        # Find matching endfunc
+                        endfunc_index = find_matching_end(all_commands, class_index, "func", "endfunc")
+                        if endfunc_index == -1:
+                            raise CeronaError(
+                                f"missing 'endfunc' for method '{method_name}'",
+                                ln,
+                                original_lines[ln - 1] if ln <= len(original_lines) else None
+                            )
+
+                        # Store method definition
+                        methods[method_name] = (params, all_commands, ln)
+                        class_index = endfunc_index
+
+                    class_index += 1
+
+                # Store class definition
+                classes[class_name] = CeronaClass(class_name, attributes, methods, line_num)
+
+                return endclass_index - current_index
+
+            # --- CREATE OBJECT INSTANCE ---
+            elif i[0] == "new":
+                if len(i) < 3:
+                    raise CeronaError(
+                        "new requires class name and instance name",
+                        line_num,
+                        original_lines[line_num - 1] if line_num <= len(original_lines) else None
+                    )
+
+                class_name = i[1]
+                instance_name = i[2]
+                args = [resolve_value(arg, variables, line_num) for arg in i[3:]]
+
+                if class_name not in classes:
+                    raise CeronaError(
+                        f"undefined class '{class_name}'",
+                        line_num,
+                        original_lines[line_num - 1] if line_num <= len(original_lines) else None
+                    )
+
+                class_def = classes[class_name]
+
+                # Create instance with default attributes
+                obj = CeronaObject(class_def, class_def.attributes)
+                objects[instance_name] = obj
+
+                # Call init method if it exists
+                if "init" in class_def.methods:
+                    call_method(obj, "init", args, all_commands)
 
             # --- FUNCTION DEFINITIONS ---
             elif i[0] == "func":
@@ -216,7 +462,7 @@ def ifs(lines, filename="<input>"):
                 current_index = next((idx for idx, (ln, cmd) in enumerate(all_commands) if ln == line_num), -1)
                 if current_index == -1:
                     raise CeronaError("internal error: could not find current command", line_num)
-                
+
                 endfunc_index = find_matching_end(all_commands, current_index, "func", "endfunc")
                 if endfunc_index != -1:
                     functions[func_name] = (params, all_commands, line_num)
@@ -235,9 +481,27 @@ def ifs(lines, filename="<input>"):
                         line_num,
                         original_lines[line_num - 1] if line_num <= len(original_lines) else None
                     )
-                func_name = i[1]
-                args = [resolve_value(arg, variables, line_num) for arg in i[2:]]
-                call_function(func_name, args, variables, all_commands)
+
+                # Check if it's a method call (obj.method)
+                if "." in i[1]:
+                    parts = i[1].split(".", 1)
+                    obj_name = parts[0]
+                    method_name = parts[1]
+
+                    if obj_name not in objects:
+                        raise CeronaError(
+                            f"undefined object '{obj_name}'",
+                            line_num,
+                            original_lines[line_num - 1] if line_num <= len(original_lines) else None
+                        )
+
+                    args = [resolve_value(arg, variables, line_num) for arg in i[2:]]
+                    call_method(objects[obj_name], method_name, args, all_commands)
+                else:
+                    # Regular function call
+                    func_name = i[1]
+                    args = [resolve_value(arg, variables, line_num) for arg in i[2:]]
+                    call_function(func_name, args, variables, all_commands)
 
             # --- CONTROL FLOW: IF STATEMENTS ---
             elif i[0] == "if":
@@ -405,7 +669,7 @@ def ifs(lines, filename="<input>"):
                         line_num,
                         original_lines[line_num - 1] if line_num <= len(original_lines) else None
                     )
-        
+
         except CeronaError:
             raise
         except Exception as e:
@@ -463,4 +727,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

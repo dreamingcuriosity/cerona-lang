@@ -1,3 +1,1 @@
-for i in 0 3
-	print i
-endfor
+print "test"
