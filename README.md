@@ -1,8 +1,3 @@
----
-
-
-
-[# Cerona](./ex)
 
 Cerona is an unconventional esoteric programming language that takes a radical approach to language implementation: no parser, no lexer, no AST. Instead, it interprets code directly through string manipulation and token evaluation, making it a truly minimalist and experimental language.
 
@@ -250,4 +245,4 @@ Pull requests, bug reports, and philosophical arguments about “what even is a 
 ---
 
 "Why parse when you can just... not?" — The Cerona Philosophy
----
+
